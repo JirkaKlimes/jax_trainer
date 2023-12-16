@@ -2,7 +2,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
-from flax.training import train_state
+from flax.training.train_state import TrainState
 from optax._src.base import GradientTransformation
 from tqdm import tqdm
 import pandas as pd
@@ -13,11 +13,7 @@ from pathlib import Path
 from tabulate import tabulate
 
 
-from src.dataloader import DataLoader
-
-
-class TrainState(train_state.TrainState):
-    batch_stats: Any
+from jax_trainer.src.dataloader import DataLoader
 
 
 class Trainer:
@@ -52,9 +48,8 @@ class Trainer:
     def init_params(self):
         print('Initialazing model params')
         x = jnp.ones(self.input_shape, jnp.float32)
-        variables = self.model.init(self.key, x, training=False)
+        variables = self.model.init(self.key, x)
         self.params = variables['params']
-        self.batch_stats = variables['batch_stats']
 
     def tabulate_model(self):
         x = jnp.ones(self.input_shape, jnp.float32)
@@ -94,7 +89,6 @@ class Trainer:
             apply_fn=self.model.apply,
             tx=self.optimizer,
             params=self.params,
-            batch_stats=self.batch_stats
         )
 
     def compile_training_step(self):
@@ -107,20 +101,18 @@ class Trainer:
 
             def run_inference(params):
 
-                predictions, new_state = state.apply_fn(
-                    {'params': params}, x, training=True, mutable=['batch_stats'])
+                predictions = state.apply_fn({'params': params}, x)
 
                 loss = self.loss_fn(y, predictions)
                 metrics = {
                     m.__name__: m(y, predictions)
                     for m in self.metrics
                 }
-                return loss, (new_state, metrics)
+                return loss, metrics
 
             grad_fn = jax.value_and_grad(run_inference, has_aux=True)
-            (loss, (new_state, metrics)), grads = grad_fn(state.params)
-            state = state.apply_gradients(
-                grads=grads, batch_stats=new_state['batch_stats'])
+            (loss, metrics), grads = grad_fn(state.params)
+            state = state.apply_gradients(grads=grads)
 
             return (loss, metrics), state
 
@@ -137,8 +129,7 @@ class Trainer:
 
             def run_inference(params):
 
-                predictions, _ = state.apply_fn(
-                    {'params': params}, x, training=False, mutable=['batch_stats'])
+                predictions = state.apply_fn({'params': params}, x)
 
                 loss = self.loss_fn(y, predictions)
                 metrics = {
